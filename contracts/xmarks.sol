@@ -1,8 +1,10 @@
+import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+
 // SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.20;
 
-contract XMarks {
+contract XMarks is ConfirmedOwner {
     uint256 public gameId = 0;
     uint256 public maximumGuesses = 3;
 
@@ -33,5 +35,25 @@ contract XMarks {
 
     mapping (address => bool) public verifiedWallets;
 
-    constructor() {}
+    constructor() ConfirmedOwner(msg.sender) {}
+
+    function getGameData(address wallet, uint256 instance) public view returns (Guess[] memory) {
+        return gameData[wallet][instance];
+    }
+
+    function getCurrentGameImage() public view returns (string memory) {
+        return games[gameId].image;
+    }
+
+    function submitGuess(uint256 longitude, uint256 latitude) public {
+
+    }
+    
+    function isWinner(address addr, uint256 id) public view returns (bool) {
+        return games[id].winner == addr;
+    }
+
+    function addVerifiedWallet(address addr) public onlyOwner {
+        verifiedWallets[addr] = true;
+    }
 }
