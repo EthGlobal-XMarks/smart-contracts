@@ -4,6 +4,10 @@ import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/Confir
 
 pragma solidity ^0.8.20;
 
+interface IPrizes {
+    function awardItem(address winner, string memory tokenURI) external;
+}
+
 contract XMarks is ConfirmedOwner {
     uint256 public gameId = 0;
     uint256 public maximumGuesses = 3;
@@ -36,6 +40,10 @@ contract XMarks is ConfirmedOwner {
     mapping (address => bool) public verifiedWallets;
 
     constructor() ConfirmedOwner(msg.sender) {}
+
+    function setPrizesContract(address _prizesContract) public onlyOwner {
+        prizesContract = _prizesContract;
+    }
 
     function getGameData(address wallet, uint256 instance) public view returns (Guess[] memory) {
         return gameData[wallet][instance];
@@ -79,7 +87,7 @@ contract XMarks is ConfirmedOwner {
         gameGuesses[gameId].push(guess);
     }
 
-        function recordWinner(address winner, uint256 winningLongitude, uint256 winningLatitude) public onlyOwner {
+    function recordWinner(address winner, uint256 winningLongitude, uint256 winningLatitude) public onlyOwner {
           GameInstance memory instance = GameInstance({
             winner: winner, 
             id: gameId, 
@@ -92,6 +100,8 @@ contract XMarks is ConfirmedOwner {
         });
 
         games[gameId] = instance;
+
+        IPrizes(prizesContract).awardItem(winner, games[gameId].image);
     }
 
     // starts a new game and increments the game id
