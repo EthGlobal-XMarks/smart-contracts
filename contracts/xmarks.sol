@@ -45,8 +45,59 @@ contract XMarks is ConfirmedOwner {
         return games[gameId].image;
     }
 
-    function submitGuess(uint256 longitude, uint256 latitude) public {
+    function setImage(string memory image) public onlyOwner {
+        GameInstance memory instance = GameInstance({
+            winner: address(0), 
+            id: gameId, 
+            winningLongitude: 0,
+            winningLatitude: 0,
+            image: image,
+            active: true,
+            longitudeHash: games[gameId].longitudeHash,
+            latitudeHash: games[gameId].latitudeHash
+        });
 
+        games[gameId] = instance;
+    }
+
+    function requestRandomWords() private returns (uint256 requestId) {
+    
+    }
+
+    function submitGuess(uint256 longitude, uint256 latitude) public {
+        require(gameData[msg.sender][gameId].length < maximumGuesses, "XMarks: maximum guesses reached for this wallet");
+        require(games[gameId].active, "XMarks: the game has ended");
+        if (gameData[msg.sender][gameId].length > 0) {
+            require(verifiedWallets[msg.sender], "XMarks: wallet is not verified with Worldcoin");
+        }
+        Guess memory guess = Guess({
+            longitude: longitude, 
+            latitude: latitude, 
+            wallet: msg.sender
+        });
+        gameData[msg.sender][gameId].push(guess);
+        gameGuesses[gameId].push(guess);
+    }
+
+        function recordWinner(address winner, uint256 winningLongitude, uint256 winningLatitude) public onlyOwner {
+          GameInstance memory instance = GameInstance({
+            winner: winner, 
+            id: gameId, 
+            winningLongitude: winningLongitude,
+            winningLatitude: winningLatitude,
+            image: games[gameId].image,
+            active: false,
+            longitudeHash: games[gameId].longitudeHash,
+            latitudeHash: games[gameId].latitudeHash
+        });
+
+        games[gameId] = instance;
+    }
+
+    // starts a new game and increments the game id
+    function startNewGame() public onlyOwner {
+        gameId = gameId + 1;
+        requestRandomWords();
     }
     
     function isWinner(address addr, uint256 id) public view returns (bool) {
