@@ -1,16 +1,20 @@
-import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
-import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
-import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
-
 // SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.20;
+ 
+import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
+import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/dev/v1_0_0/FunctionsClient.sol";
+import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/dev/v1_0_0/libraries/FunctionsRequest.sol";
 
 interface IPrizes {
     function awardItem(address winner, string memory tokenURI) external;
 }
 
-contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
+contract XMarks is ConfirmedOwner, VRFConsumerBaseV2, FunctionsClient {
+    using FunctionsRequest for FunctionsRequest.Request;
+
     uint256 public gameId = 0;
     uint256 public maximumGuesses = 3;
 
@@ -41,7 +45,29 @@ contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
 
     mapping (address => bool) public verifiedWallets;
 
+    event RequestSent(uint256 requestId, uint32 numWords);
+    event RequestFulfilled(uint256 requestId, uint256[] randomWords);
+    
+    error UnexpectedRequestID(bytes32 requestId);
+    event Response(bytes32 indexed requestId, bytes response, bytes err);
+
+    struct RequestStatus {
+        bool fulfilled;
+        bool exists;
+        uint256[] randomWords;
+    }
+    mapping(uint256 => RequestStatus) public s_requests;
+    VRFCoordinatorV2Interface COORDINATOR;
+
     uint64 s_subscriptionId;
+    uint64 subscriptionId;
+
+    uint256[] public requestIds;
+    uint256 public lastRequestId;
+
+    bytes32 public s_lastRequestId;
+    bytes public s_lastResponse;
+    bytes public s_lastError;
 
     bytes32 keyHash = 0x027f94ff1465b3525f9fc03e9ff7d6d2c0953482246dd6ae07570c45d6631414;
 
@@ -51,25 +77,24 @@ contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
 
     uint32 numWords = 2;
 
-    VRFCoordinatorV2Interface COORDINATOR;
-    struct RequestStatus {
-        bool fulfilled;
-        bool exists;
-        uint256[] randomWords;
-    }
-    mapping(uint256 => RequestStatus) public s_requests;
+    uint32 gasLimit = 300000;
+    bytes32 donID = 0x66756e2d617262697472756d2d7365706f6c69612d3100000000000000000000;
 
-    uint256[] public requestIds;
-    uint256 public lastRequestId;
 
-    event RequestSent(uint256 requestId, uint32 numWords);
-    event RequestFulfilled(uint256 requestId, uint256[] randomWords);
-
-    constructor(uint64 randomSubscriptionId) ConfirmedOwner(msg.sender) VRFConsumerBaseV2(0x50d47e4142598E3411aA864e08a44284e471AC6f) {
-        s_subscriptionId = randomSubscriptionId;
+    constructor(
+        uint64 randomSubscriptionId,
+        uint64 functionsSubscriptionId,
+        address router
+    )
+        VRFConsumerBaseV2(0x50d47e4142598E3411aA864e08a44284e471AC6f)
+        FunctionsClient(router)
+        ConfirmedOwner(msg.sender)
+    {
         COORDINATOR = VRFCoordinatorV2Interface(
             0x50d47e4142598E3411aA864e08a44284e471AC6f
         );
+        s_subscriptionId = randomSubscriptionId;
+        subscriptionId = functionsSubscriptionId;
     }
 
     function setPrizesContract(address _prizesContract) public onlyOwner {
@@ -97,26 +122,6 @@ contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
         });
 
         games[gameId] = instance;
-    }
-
-    function requestRandomWords() private returns (uint256 requestId) {
-        // Will revert if subscription is not set and funded.
-        requestId = COORDINATOR.requestRandomWords(
-            keyHash,
-            s_subscriptionId,
-            requestConfirmations,
-            callbackGasLimit,
-            numWords
-        );
-        s_requests[requestId] = RequestStatus({
-            randomWords: new uint256[](0),
-            exists: true,
-            fulfilled: false
-        });
-        requestIds.push(requestId);
-        lastRequestId = requestId;
-        emit RequestSent(requestId, numWords);
-        return requestId;
     }
 
     function convertToString(uint256 number) public pure returns (string memory) {
@@ -148,6 +153,26 @@ contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
         return string(buffer);
     }
 
+     function requestRandomWords() private returns (uint256 requestId) {
+        // Will revert if subscription is not set and funded.
+        requestId = COORDINATOR.requestRandomWords(
+            keyHash,
+            s_subscriptionId,
+            requestConfirmations,
+            callbackGasLimit,
+            numWords
+        );
+        s_requests[requestId] = RequestStatus({
+            randomWords: new uint256[](0),
+            exists: true,
+            fulfilled: false
+        });
+        requestIds.push(requestId);
+        lastRequestId = requestId;
+        emit RequestSent(requestId, numWords);
+        return requestId;
+    }
+
     function fulfillRandomWords(
         uint256 _requestId,
         uint256[] memory _randomWords
@@ -170,6 +195,60 @@ contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
         });
 
         games[gameId] = instance;
+
+
+        string memory source = 
+            "const random1 = args[0];"
+            "const random2 = args[1];"
+            "const query = await Functions.makeHttpRequest({"
+                "url: `https://us-central1-twinken-372418.cloudfunctions.net/test/getCoordinates`,"
+                "method: 'POST',"
+                "headers: {"
+                    "'Content-Type': 'application/json',"
+                "},"
+                "data: {"
+                    "random1: `${random1}`,"
+                    "random2: `${random2}`,"
+                "},"
+            "});"
+            "return Functions.encodeUint256(query.success);"
+        ;
+
+        string[] memory args = new string[](2);
+        args[0] = random1;
+        args[1] = random2;
+
+        FunctionsRequest.Request memory req;
+        req.initializeRequestForInlineJavaScript(source);
+        req.setArgs(args);
+        s_lastRequestId = _sendRequest(
+            req.encodeCBOR(),
+            subscriptionId,
+            gasLimit,
+            donID
+        );
+        emit RequestFulfilled(_requestId, _randomWords);
+    }
+    
+    function fulfillRequest(
+        bytes32 requestId,
+        bytes memory response,
+        bytes memory err
+    ) internal override {
+        if (s_lastRequestId != requestId) {
+            revert UnexpectedRequestID(requestId);
+        }
+        s_lastResponse = response;
+        s_lastError = err;
+        emit Response(requestId, s_lastResponse, s_lastError);
+    }
+
+    function getRequestStatus(
+        uint256 _requestId
+    ) external view returns (bool fulfilled, uint256[] memory randomWords) {
+        require(s_requests[_requestId].exists, "request not found");
+        RequestStatus memory request = s_requests[_requestId];
+        return (request.fulfilled, request.randomWords);
     }
 
     // returns all guesses from a given game instance
@@ -177,7 +256,7 @@ contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
         return gameGuesses[id]; 
     }
 
-
+    // submit a guess and adds it to the user mapping 
     function submitGuess(uint256 longitude, uint256 latitude) public {
         require(gameData[msg.sender][gameId].length < maximumGuesses, "XMarks: maximum guesses reached for this wallet");
         require(games[gameId].active, "XMarks: the game has ended");
@@ -192,7 +271,7 @@ contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
         gameData[msg.sender][gameId].push(guess);
         gameGuesses[gameId].push(guess);
     }
-
+ 
     function recordWinner(address winner, uint256 winningLongitude, uint256 winningLatitude) public onlyOwner {
           GameInstance memory instance = GameInstance({
             winner: winner, 
@@ -215,11 +294,13 @@ contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
         gameId = gameId + 1;
         requestRandomWords();
     }
-    
+
+    // checks if an address is the winner of a given game instance
     function isWinner(address addr, uint256 id) public view returns (bool) {
         return games[id].winner == addr;
     }
 
+    // adds the verification status of a wallet to the list
     function addVerifiedWallet(address addr) public onlyOwner {
         verifiedWallets[addr] = true;
     }
