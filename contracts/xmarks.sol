@@ -119,12 +119,64 @@ contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
         return requestId;
     }
 
-     function fulfillRandomWords(
+    function convertToString(uint256 number) public pure returns (string memory) {
+        string memory str = toString(number);
+        return str;
+    }
+ 
+    function toString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) {
+            return "0";
+        }
+ 
+        uint256 temp = value;
+        uint256 digits;
+ 
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+ 
+        bytes memory buffer = new bytes(digits);
+ 
+        while (value != 0) {
+            digits--;
+            buffer[digits] = bytes1(uint8(48 + (value % 10)));
+            value /= 10;
+        }
+ 
+        return string(buffer);
+    }
+
+    function fulfillRandomWords(
         uint256 _requestId,
         uint256[] memory _randomWords
     ) internal override {
+        require(s_requests[_requestId].exists, "request not found");
+        s_requests[_requestId].fulfilled = true;
+        s_requests[_requestId].randomWords = _randomWords;
+        string memory random1 = convertToString(_randomWords[0]);
+        string memory random2 = convertToString(_randomWords[1]);
 
+        GameInstance memory instance = GameInstance({
+            winner: address(0), 
+            id: gameId, 
+            winningLongitude: 0,
+            winningLatitude: 0,
+            image: "",
+            active: true,
+            longitudeHash: sha256(bytes(random1)),
+            latitudeHash: sha256(bytes(random2))
+        });
+
+        games[gameId] = instance;
     }
+
+    // returns all guesses from a given game instance
+    function getGameGuesses(uint256 id) public view returns (Guess[] memory) {
+        return gameGuesses[id]; 
+    }
+
 
     function submitGuess(uint256 longitude, uint256 latitude) public {
         require(gameData[msg.sender][gameId].length < maximumGuesses, "XMarks: maximum guesses reached for this wallet");
