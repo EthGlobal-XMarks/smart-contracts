@@ -1,4 +1,6 @@
 import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
 
 // SPDX-License-Identifier: MIT
 
@@ -8,7 +10,7 @@ interface IPrizes {
     function awardItem(address winner, string memory tokenURI) external;
 }
 
-contract XMarks is ConfirmedOwner {
+contract XMarks is ConfirmedOwner, VRFConsumerBaseV2 {
     uint256 public gameId = 0;
     uint256 public maximumGuesses = 3;
 
@@ -39,7 +41,36 @@ contract XMarks is ConfirmedOwner {
 
     mapping (address => bool) public verifiedWallets;
 
-    constructor() ConfirmedOwner(msg.sender) {}
+    uint64 s_subscriptionId;
+
+    bytes32 keyHash = 0x027f94ff1465b3525f9fc03e9ff7d6d2c0953482246dd6ae07570c45d6631414;
+
+    uint32 callbackGasLimit = 800000;
+    
+    uint16 requestConfirmations = 3;
+
+    uint32 numWords = 2;
+
+    VRFCoordinatorV2Interface COORDINATOR;
+    struct RequestStatus {
+        bool fulfilled;
+        bool exists;
+        uint256[] randomWords;
+    }
+    mapping(uint256 => RequestStatus) public s_requests;
+
+    uint256[] public requestIds;
+    uint256 public lastRequestId;
+
+    event RequestSent(uint256 requestId, uint32 numWords);
+    event RequestFulfilled(uint256 requestId, uint256[] randomWords);
+
+    constructor(uint64 randomSubscriptionId) ConfirmedOwner(msg.sender) VRFConsumerBaseV2(0x50d47e4142598E3411aA864e08a44284e471AC6f) {
+        s_subscriptionId = randomSubscriptionId;
+        COORDINATOR = VRFCoordinatorV2Interface(
+            0x50d47e4142598E3411aA864e08a44284e471AC6f
+        );
+    }
 
     function setPrizesContract(address _prizesContract) public onlyOwner {
         prizesContract = _prizesContract;
@@ -69,7 +100,30 @@ contract XMarks is ConfirmedOwner {
     }
 
     function requestRandomWords() private returns (uint256 requestId) {
-    
+        // Will revert if subscription is not set and funded.
+        requestId = COORDINATOR.requestRandomWords(
+            keyHash,
+            s_subscriptionId,
+            requestConfirmations,
+            callbackGasLimit,
+            numWords
+        );
+        s_requests[requestId] = RequestStatus({
+            randomWords: new uint256[](0),
+            exists: true,
+            fulfilled: false
+        });
+        requestIds.push(requestId);
+        lastRequestId = requestId;
+        emit RequestSent(requestId, numWords);
+        return requestId;
+    }
+
+     function fulfillRandomWords(
+        uint256 _requestId,
+        uint256[] memory _randomWords
+    ) internal override {
+
     }
 
     function submitGuess(uint256 longitude, uint256 latitude) public {
